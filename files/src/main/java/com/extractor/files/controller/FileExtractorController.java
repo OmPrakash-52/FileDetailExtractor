@@ -1,14 +1,17 @@
 package com.extractor.files.controller;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
 
 import org.apache.batik.transcoder.TranscoderException;
 import org.apache.batik.transcoder.TranscoderInput;
@@ -24,7 +27,6 @@ import org.apache.xmlbeans.XmlObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -38,80 +40,77 @@ import org.springframework.web.multipart.MultipartFile;
 public class FileExtractorController {
 
 	private static final String UPLOAD_DIR = "C:/uploads/";
-
+	
 	@PostMapping("/svg")
 	public ResponseEntity<Map<String, Object>> uploadSvg(@RequestPart("file") MultipartFile file) {
 
-		if (!file.getContentType().equals("image/svg+xml")) {
-			return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
-					.body(Map.of("error", "Only SVG files are allowed!"));
-		}
+	    if (!file.getContentType().equals("image/svg+xml")) {
+	        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+	                .body(Map.of("error", "Only SVG files are allowed!"));
+	    }
 
-		String svgFileName = file.getOriginalFilename();
-		Map<String, Object> result = new HashMap<>();
+	    String svgFileName = file.getOriginalFilename();
+	    Map<String, Object> result = new HashMap<>();
 
-		try (InputStream inputStream = file.getInputStream()) {
+	    try (InputStream inputStream = file.getInputStream()) {
 
-			Document doc = Jsoup.parse(file.getInputStream(), "UTF-8", "", org.jsoup.parser.Parser.xmlParser());
-			doc.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
+	        // Parse the SVG file dynamically
+	        Document doc = Jsoup.parse(inputStream, "UTF-8", "", org.jsoup.parser.Parser.xmlParser());
+	        doc.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
 
-			doc.select("svg").attr("xmlns:xlink", "http://www.w3.org/1999/xlink");
+	        Element svgElement = doc.selectFirst("svg");
+	        if (svgElement != null && !svgElement.hasAttr("xmlns:xlink")) {
+	            svgElement.attr("xmlns:xlink", "http://www.w3.org/1999/xlink");
+	        }
 
-			List<String> foreignObjectsList = doc.select("foreignObject").eachText();
-			result.put("foreignObjects", foreignObjectsList);
+	        // Extract all path data dynamically
+	        List<String> svgPaths = doc.select("path").eachAttr("d");
+	        result.put("svgPaths", svgPaths);
 
-			List<String> linksList = new ArrayList<>();
-			Elements links = doc.select("a");
-			for (Element link : links) {
-				String href = link.attr("xlink:href");
-				if (href.isEmpty()) {
-					href = link.attr("href");
-				}
-				if (!href.isEmpty()) {
-					linksList.add(href);
-				}
-			}
-			result.put("links", linksList);
+	        // Extract foreignObjects dynamically
+	        List<String> foreignObjectsList = doc.select("foreignObject").eachText();
+	        result.put("foreignObjects", foreignObjectsList);
 
-			List<String> imagesList = new ArrayList<>();
-			Elements images = doc.select("image");
-			for (Element image : images) {
-				String href = image.attr("xlink:href");
-				if (href.isEmpty()) {
-					href = image.attr("href");
-				}
-				if (!href.isEmpty()) {
-					imagesList.add(href);
-				}
-			}
+	        // Extract links dynamically
+	        List<String> linksList = doc.select("a").eachAttr("xlink:href");
+	        if (linksList.isEmpty()) {
+	            linksList = doc.select("a").eachAttr("href");
+	        }
+	        result.put("links", linksList);
 
-			result.put("images", imagesList);
+	        // Extract images dynamically
+	        List<String> imagesList = doc.select("image").eachAttr("xlink:href");
+	        if (imagesList.isEmpty()) {
+	            imagesList = doc.select("image").eachAttr("href");
+	        }
+	        result.put("images", imagesList);
 
-			String pngFileName = svgFileName.replace(".svg", ".png");
-			File outputFile = new File(UPLOAD_DIR + pngFileName);
+	        // Convert SVG to PNG dynamically
+	        String pngFileName = svgFileName.replace(".svg", ".png");
+	        File outputFile = new File(UPLOAD_DIR + pngFileName);
 
-			try (OutputStream outputStream = new FileOutputStream(outputFile)) {
-				PNGTranscoder transcoder = new PNGTranscoder();
-				TranscoderInput input = new TranscoderInput(inputStream);
-				TranscoderOutput output = new TranscoderOutput(outputStream);
-				transcoder.transcode(input, output);
-				result.put("pngFilePath", outputFile.getAbsolutePath());
-			} catch (TranscoderException e) {
-				e.printStackTrace();
-				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-						.body(Map.of("error", "Error converting SVG to PNG: " + e.getMessage()));
-			}
+	        try (OutputStream outputStream = new FileOutputStream(outputFile)) {
+	            PNGTranscoder transcoder = new PNGTranscoder();
+	            TranscoderInput input = new TranscoderInput(new ByteArrayInputStream(doc.html().getBytes(StandardCharsets.UTF_8)));
+	            TranscoderOutput output = new TranscoderOutput(outputStream);
+	            transcoder.transcode(input, output);
+	            result.put("pngFilePath", outputFile.getAbsolutePath());
+	        } catch (TranscoderException e) {
+	            e.printStackTrace();
+	            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+	                    .body(Map.of("error", "Error converting SVG to PNG: " + e.getMessage()));
+	        }
 
-			result.put("message", "SVG parsed and converted successfully");
+	        result.put("message", "SVG parsed and converted successfully");
+	        return ResponseEntity.ok(result);
 
-			return ResponseEntity.ok(result);
-
-		} catch (IOException e) {
-			e.printStackTrace();
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.body(Map.of("error", "Error processing file: " + e.getMessage()));
-		}
+	    } catch (IOException e) {
+	        e.printStackTrace();
+	        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+	                .body(Map.of("error", "Error processing file: " + e.getMessage()));
+	    }
 	}
+
 
 	@PostMapping("/ppt")
 	public ResponseEntity<Map<String, Object>> uploadPpt(@RequestPart("file") MultipartFile file) {
@@ -140,8 +139,9 @@ public class FileExtractorController {
 						shapeInfo.put("width", textShape.getAnchor().getWidth());
 						shapeInfo.put("height", textShape.getAnchor().getHeight());
 
-						extractYellowDot(textShape, shapeInfo);
-
+						if (textShape.getShapeType() == ShapeType.ROUND_RECT) {
+							extractYellowDot(textShape, shapeInfo);
+						}
 						System.out.println("Yellow Dot " + shapeInfo.get("yellowDot"));
 						shapeInfo.put("svgPath",
 								generatePath(textShape.getAnchor().getX(), textShape.getAnchor().getY(),
